@@ -95,7 +95,19 @@ https://earthquake.usgs.gov
 - Terraform
 - Dominio personalizado
 - Histórico avanzado de terremotos
+## Capturas del proyecto
 
+### Dashboard principal
+
+![Dashboard](dashboard.jpg)
+
+### Gráfico de magnitudes
+
+![Gráfico](graph_01.jpg)
+
+### Tabla de terremotos
+
+![Tabla](tabla.jpg)
 ## Autor
 
 Jon Gorritxo
