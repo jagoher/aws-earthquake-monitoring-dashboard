@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Earthquake Monitoring Dashboard</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f4f6f8; color: #111827; }
+    header { background: #111827; color: white; padding: 28px 40px; }
+    header h1 { margin: 0; font-size: 34px; }
+    header p { margin-top: 10px; color: #d1d5db; font-size: 17px; }
+    main { padding: 32px 40px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 18px; margin-bottom: 28px; }
+    .card, .panel { background: white; border-radius: 12px; padding: 22px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+    .card h2 { margin: 0; font-size: 14px; color: #6b7280; }
+    .card p { margin: 12px 0 0; font-size: 30px; font-weight: bold; }
+    .card small { display: block; margin-top: 6px; color: #6b7280; }
+    #map { height: 430px; margin-bottom: 26px; border-radius: 12px; }
+    .legend { margin-bottom: 24px; display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; color: #374151; }
+    .dot { display: inline-block; width: 13px; height: 13px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+    .green { background: #16a34a; }
+    .yellow { background: #f59e0b; }
+    .red { background: #dc2626; }
+    .controls { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+    input, select { padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; }
+    .table-wrapper { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; background: white; }
+    th, td { padding: 14px; border-bottom: 1px solid #e5e7eb; text-align: left; white-space: nowrap; }
+    th { background: #1f2937; color: white; }
+    tr:hover { background: #f9fafb; }
+    .mag { font-weight: bold; padding: 6px 10px; border-radius: 999px; display: inline-block; }
+    .low { background: #dcfce7; color: #166534; }
+    .medium { background: #fef9c3; color: #854d0e; }
+    .high { background: #fee2e2; color: #991b1b; }
+    a { color: #2563eb; text-decoration: none; font-weight: bold; }
+    footer { padding: 20px 40px; color: #6b7280; font-size: 14px; }
+    .status { margin-top: 8px; font-size: 14px; color: #9ca3af; }
+  </style>
+</head>
+
+<body>
+
+<header>
+  <h1>🌎 Earthquake Monitoring Dashboard</h1>
+  <p>USGS → DynamoDB → Lambda → S3 Static Website</p>
+  <div class="status" id="refreshStatus">Esperando datos...</div>
+</header>
+
+<main>
+
+  <section class="cards">
+    <div class="card"><h2>Total terremotos</h2><p id="total">-</p></div>
+    <div class="card"><h2>Mayor magnitud</h2><p id="maxMag">-</p></div>
+    <div class="card"><h2>Profundidad media</h2><p id="avgDepth">-</p></div>
+    <div class="card"><h2>Eventos ≥ 2.0</h2><p id="strongEvents">-</p></div>
+    <div class="card">
+      <h2>Último terremoto detectado</h2>
+      <p id="latestMag" style="font-size:24px;">-</p>
+      <small id="latestPlace">-</small>
+      <small id="latestDate">-</small>
+    </div>
+    <div class="card"><h2>Última lectura del JSON</h2><p id="updated" style="font-size:18px;">-</p></div>
+  </section>
+
+  <div id="map"></div>
+
+  <div class="legend">
+    <span><span class="dot green"></span>Magnitud &lt; 2</span>
+    <span><span class="dot yellow"></span>Magnitud 2 - 3.9</span>
+    <span><span class="dot red"></span>Magnitud ≥ 4</span>
+  </div>
+
+  <section class="panel" style="margin-bottom:26px;">
+    <h2>Gráfico de magnitudes por lugar</h2>
+    <canvas id="chart" height="250"></canvas>
+  </section>
+
+  <section class="panel" style="margin-bottom:26px;">
+    <h2>Magnitud de los últimos terremotos</h2>
+    <canvas id="timelineChart" height="250"></canvas>
+  </section>
+
+  <section class="panel">
+    <h2>Tabla de terremotos</h2>
+
+    <div class="controls">
+      <input type="text" id="search" placeholder="Buscar por lugar..." />
+      <select id="minMag">
+        <option value="0">Todas las magnitudes</option>
+        <option value="1">Magnitud ≥ 1</option>
+        <option value="2">Magnitud ≥ 2</option>
+        <option value="3">Magnitud ≥ 3</option>
+        <option value="4">Magnitud ≥ 4</option>
+      </select>
+    </div>
+
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Magnitud</th>
+            <th>Lugar</th>
+            <th>Fecha</th>
+            <th>Profundidad km</th>
+            <th>Latitud</th>
+            <th>Longitud</th>
+            <th>USGS</th>
+            <th>Mapa</th>
+          </tr>
+        </thead>
+        <tbody id="tabla"></tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Auto-refresh cada 60 segundos sin recargar la página · Proyecto AWS Serverless
+</footer>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script>
+  let allData = [];
+  let map;
+  let markersLayer;
+  let chart;
+  let timelineChart;
+
+  function magnitudeClass(mag) {
+    if (mag >= 4) return "high";
+    if (mag >= 2) return "medium";
+    return "low";
+  }
+
+  function markerColor(mag) {
+    if (mag >= 4) return "#dc2626";
+    if (mag >= 2) return "#f59e0b";
+    return "#16a34a";
+  }
+
+  function shortPlace(place) {
+    if (!place) return "Sin ubicación";
+    return place.length > 40 ? place.substring(0, 40) + "..." : place;
+  }
+
+  function formatDate(timestamp) {
+    if (!timestamp) return "";
+    const value = Number(timestamp);
+    if (isNaN(value)) return "";
+    return new Date(value).toLocaleString();
+  }
+
+  function initMap() {
+    map = L.map("map").setView([20, 0], 2);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    markersLayer = L.layerGroup().addTo(map);
+  }
+
+  function render(data) {
+    const tbody = document.getElementById("tabla");
+    tbody.innerHTML = "";
+    markersLayer.clearLayers();
+
+    data.sort((a, b) => Number(b.time || 0) - Number(a.time || 0));
+
+    const total = data.length;
+    const maxMag = total ? Math.max(...data.map(q => Number(q.magnitude || 0))) : 0;
+    const avgDepth = total ? data.reduce((sum, q) => sum + Number(q.depthKm || 0), 0) / total : 0;
+    const strongEvents = data.filter(q => Number(q.magnitude || 0) >= 2).length;
+
+    document.getElementById("total").textContent = total;
+    document.getElementById("maxMag").textContent = maxMag.toFixed(2);
+    document.getElementById("avgDepth").textContent = avgDepth.toFixed(2) + " km";
+    document.getElementById("strongEvents").textContent = strongEvents;
+    document.getElementById("updated").textContent = new Date().toLocaleString();
+
+    if (total > 0) {
+      const latest = data[0];
+      document.getElementById("latestMag").textContent = "M " + Number(latest.magnitude || 0).toFixed(2);
+      document.getElementById("latestPlace").textContent = latest.place || "Sin ubicación";
+      document.getElementById("latestDate").textContent = formatDate(latest.time);
+    }
+
+    const bounds = [];
+
+    data.forEach(item => {
+      const mag = Number(item.magnitude || 0);
+      const lat = Number(item.latitude);
+      const lon = Number(item.longitude);
+      const depth = Number(item.depthKm || 0);
+      const quakeDate = formatDate(item.time);
+
+      if (!isNaN(lat) && !isNaN(lon)) {
+        const marker = L.circleMarker([lat, lon], {
+          radius: 8 + mag,
+          color: markerColor(mag),
+          fillColor: markerColor(mag),
+          fillOpacity: 0.8
+        }).bindPopup(`
+          <strong>${item.place || "Sin ubicación"}</strong><br>
+          Fecha: ${quakeDate}<br>
+          Magnitud: ${mag.toFixed(2)}<br>
+          Profundidad: ${depth.toFixed(2)} km<br>
+          Latitud: ${lat}<br>
+          Longitud: ${lon}<br>
+          <a href="${item.url || "#"}" target="_blank">Ver en USGS</a>
+        `);
+
+        markersLayer.addLayer(marker);
+        bounds.push([lat, lon]);
+      }
+
+      const row = document.createElement("tr");
+
+      row.innerHTML = `
+        <td>${item.quakeId || ""}</td>
+        <td><span class="mag ${magnitudeClass(mag)}">${mag.toFixed(2)}</span></td>
+        <td>${item.place || ""}</td>
+        <td>${quakeDate}</td>
+        <td>${depth.toFixed(2)}</td>
+        <td>${lat}</td>
+        <td>${lon}</td>
+        <td><a href="${item.url || "#"}" target="_blank">Ver</a></td>
+        <td><a href="https://www.google.com/maps?q=${lat},${lon}" target="_blank">Abrir</a></td>
+      `;
+
+      tbody.appendChild(row);
+    });
+
+    if (bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+
+    renderChart(data);
+    renderTimelineChart(data);
+  }
+
+  function renderChart(data) {
+    const labels = data.map(q => shortPlace(q.place));
+    const values = data.map(q => Number(q.magnitude || 0));
+
+    if (chart) chart.destroy();
+
+    chart = new Chart(document.getElementById("chart"), {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "Magnitud",
+          data: values
+        }]
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: function(context) {
+                const index = context[0].dataIndex;
+                return data[index].place || "Sin ubicación";
+              }
+            }
+          }
+        },
+        scales: {
+          x: { beginAtZero: true }
+        }
+      }
+    });
+  }
+
+  function renderTimelineChart(data) {
+    const sorted = [...data]
+      .sort((a, b) => Number(a.time || 0) - Number(b.time || 0))
+      .slice(-15);
+
+    const labels = sorted.map(item => formatDate(item.time));
+    const values = sorted.map(item => Number(item.magnitude || 0));
+
+    if (timelineChart) timelineChart.destroy();
+
+    timelineChart = new Chart(document.getElementById("timelineChart"), {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "Magnitud",
+          data: values,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          y: { beginAtZero: true }
+        }
+      }
+    });
+  }
+
+  function applyFilters() {
+    const search = document.getElementById("search").value.toLowerCase();
+    const minMag = Number(document.getElementById("minMag").value);
+
+    const filtered = allData.filter(item => {
+      const place = (item.place || "").toLowerCase();
+      const mag = Number(item.magnitude || 0);
+      return place.includes(search) && mag >= minMag;
+    });
+
+    render(filtered);
+  }
+
+  async function loadData() {
+    try {
+      document.getElementById("refreshStatus").textContent = "Actualizando datos desde S3...";
+
+      const response = await fetch("earthquakes.json?cacheBust=" + Date.now());
+
+      if (!response.ok) {
+        throw new Error("No se pudo leer earthquakes.json");
+      }
+
+      const data = await response.json();
+      allData = data;
+
+      applyFilters();
+
+      document.getElementById("refreshStatus").textContent =
+        "Datos actualizados correctamente desde S3 · " + new Date().toLocaleString();
+
+    } catch (error) {
+      document.getElementById("refreshStatus").textContent =
+        "Error actualizando datos: " + error.message;
+      console.error(error);
+    }
+  }
+
+  initMap();
+
+  document.getElementById("search").addEventListener("input", applyFilters);
+  document.getElementById("minMag").addEventListener("change", applyFilters);
+
+  loadData();
+  setInterval(loadData, 60000);
+</script>
+
+</body>
+</html>
